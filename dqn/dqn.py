@@ -11,7 +11,7 @@ import torch.nn.functional as F
 from tqdm import tqdm
 
 warnings.filterwarnings("ignore", category=DeprecationWarning, module="gym")
-
+warnings.filterwarnings("ignore", category=UserWarning, message="pkg_resources is deprecated")
 
 class DQN(nn.Module):
     def __init__(
@@ -189,7 +189,7 @@ def trainer(
             qlearn.learn(batch)
 
             if i == steps - 1:
-                ret = evaluate(dqn, eval_env, num_episodes=1)
+                ret = evaluate(dqn, eval_env, num_episodes=2)
                 pbar.set_postfix({"ret": ret})
 
 

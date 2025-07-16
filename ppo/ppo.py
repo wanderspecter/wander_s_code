@@ -7,6 +7,10 @@ import gymnasium as gym
 from tqdm import tqdm
 
 from torch.distributions import Categorical
+import warnings
+
+warnings.filterwarnings("ignore", category=DeprecationWarning, module="gym")
+warnings.filterwarnings("ignore", category=UserWarning, message="pkg_resources is deprecated")
 
 
 class Policy(nn.Module):
@@ -202,7 +206,7 @@ def trainer(
         lamda: float = 0.98
 ) -> None:
     env = gym.make(gym_name)
-    eval_env = gym.make(gym_name)
+    eval_env = gym.make(gym_name, render_mode="human")  # 不渲染评估环境
     obs_size = env.observation_space.shape[0]
     act_size = env.action_space.n
 
@@ -219,7 +223,6 @@ def trainer(
             if i == steps_per_epoch - 1:
                 ret = evaluate(actor, eval_env, num_episodes=100)
                 pbar.set_postfix({"ret": ret})
-
 
     env.close()
     eval_env.close()

@@ -9,6 +9,11 @@ from torch import nn, Tensor, optim, tensor
 import torch.nn.functional as F
 from tqdm import tqdm
 
+import warnings
+
+warnings.filterwarnings("ignore", category=DeprecationWarning, module="gym")
+warnings.filterwarnings("ignore", category=UserWarning, message="pkg_resources is deprecated")
+
 
 class DoubleQFunc(nn.Module):
     def __init__(
@@ -272,7 +277,7 @@ def trainer(
         batch_size: int = 32
 ):
     env = gym.make(env_name)
-    eval_env = gym.make(env_name)
+    eval_env = gym.make(env_name, render_mode="human")  # 渲染评估环境
     stat_size = env.observation_space.shape[0]
     act_size = env.action_space.shape[0]
 
@@ -284,7 +289,7 @@ def trainer(
     optim_q = optim.Adam(qf1.parameters(), lr=1e-4)
     optim_p = optim.Adam(policy.parameters(), lr=1e-5)
 
-    sac = SAC(optim_q, optim_p, env, 0.2, 0.99, policy, qf1, qf2, tau, act_size, 2, 1, 1, steps*epo//3)
+    sac = SAC(optim_q, optim_p, env, 0.2, 0.99, policy, qf1, qf2, tau, act_size, 2, 1, 1, steps * epo // 3)
     buffer = ReplayBuffer()
 
     sac.collect(buffer, 200, 200)
@@ -296,7 +301,7 @@ def trainer(
             batch = buffer.get(batch_size)
             sac.learn(batch)
             if i == steps - 1:
-                ret = evaluate(eval_env, 10, policy)
+                ret = evaluate(eval_env, 2, policy)
                 pbar.set_postfix({"ret": ret})
 
 
