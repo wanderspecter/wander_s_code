@@ -1816,7 +1816,6 @@ nvidia-cusparselt-cu12 = {version = "0.6.3", markers = "platform_system == \"Lin
 nvidia-nccl-cu12 = {version = "2.26.2", markers = "platform_system == \"Linux\" and platform_machine == \"x86_64\""}
 nvidia-nvjitlink-cu12 = {version = "12.6.85", markers = "platform_system == \"Linux\" and platform_machine == \"x86_64\""}
 nvidia-nvtx-cu12 = {version = "12.6.77", markers = "platform_system == \"Linux\" and platform_machine == \"x86_64\""}
-setuptools = {version = "*", markers = "python_version >= \"3.12\""}
 sympy = ">=1.13.3"
 triton = {version = "3.3.1", markers = "platform_system == \"Linux\" and platform_machine == \"x86_64\""}
 typing-extensions = ">=4.10.0"
@@ -2042,5 +2041,5 @@ type = ["pytest-mypy"]
 
 [metadata]
 lock-version = "2.1"
-python-versions = ">=3.10"
-content-hash = "598b655cb5778263db2aa45c19df6bf399e371e4f560eb35117b32910e4ddf0a"
+python-versions = "==3.10.9"
+content-hash = "6bda4e74e1d09d3b4b6bf7b848b2f0a6dea57185a09bebd6523b6f9f5d2ca8ca"

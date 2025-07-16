@@ -221,14 +221,14 @@ def trainer(
             batch_list = collecter.collect()
             ppo.learn(batch_list, lamda)
             if i == steps_per_epoch - 1:
-                ret = evaluate(actor, eval_env, num_episodes=100)
+                ret = evaluate(actor, eval_env, num_episodes=2)
                 pbar.set_postfix({"ret": ret})
 
     env.close()
     eval_env.close()
 
 
-def evaluate(agent: Policy, env, num_episodes=100) -> float:
+def evaluate(agent: Policy, env, num_episodes=2) -> float:
     total_steps = 0
     for _ in range(num_episodes):
         obs, _ = env.reset()

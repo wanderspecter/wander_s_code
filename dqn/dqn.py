@@ -41,7 +41,7 @@ class DQN(nn.Module):
         return torch.argmax(y, dim=-1)  # 返回最大Q值对应的动作
 
 
-def evaluate(agent: DQN, env, num_episodes=100) -> float:
+def evaluate(agent: DQN, env, num_episodes=2) -> float:
     total_steps = 0
     for _ in range(num_episodes):
         obs, _ = env.reset(seed=random.randint(0, 100))
