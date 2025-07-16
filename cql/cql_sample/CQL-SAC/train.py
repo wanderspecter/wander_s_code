@@ -1,7 +1,7 @@
 
 
-import gym
-import pybullet_envs
+import gymnasium as gym
+# import pybullet_envs
 import numpy as np
 from collections import deque
 import torch
