@@ -1,20 +1,24 @@
 import glob
 import math
+import pickle
 import random
 from collections import deque, namedtuple
 from collections.abc import Sequence
 import numpy as np
-
+import psutil
 import gymnasium as gym
 import torch
 from torch import nn, Tensor, optim, tensor
 import torch.nn.functional as F
 from tqdm import tqdm
+from tensorboardX import SummaryWriter
 
 import warnings
 
 warnings.filterwarnings("ignore", category=DeprecationWarning, module="gym")
 warnings.filterwarnings("ignore", category=UserWarning, message="pkg_resources is deprecated")
+
+writer = SummaryWriter("log/cql_sac")  # TensorBoard日志记录器
 
 
 class DoubleQFunc(nn.Module):
@@ -151,6 +155,45 @@ class ReplayBuffer:
             torch.stack(done)
         )
 
+    def save_to_file(self, file_path: str, i, size):
+        """将缓冲区内容保存到文件（将张量转换为NumPy数组）"""
+        # 转换缓冲区中的张量为NumPy数组（先转移到CPU）
+        numpy_buffer = []
+        for k in range(size):
+            if i + k >= len(self.buffer):
+                break
+            item = self.buffer[i + k]
+            stat, action, logp, rew, nxt_stat, done = item
+            numpy_buffer.append((
+                stat.cpu().numpy(),
+                action.cpu().numpy(),
+                logp.cpu().numpy(),
+                rew.cpu().numpy(),
+                nxt_stat.cpu().numpy(),
+                done.cpu().numpy()
+            ))
+        # 使用pickle保存（支持列表和NumPy数组）
+        with open(file_path, 'wb') as f:
+            pickle.dump(numpy_buffer, f)
+
+    def load_from_file(self, file_path: str):
+        """从文件加载缓冲区内容（将NumPy数组转换为张量）"""
+        with open(file_path, 'rb') as f:
+            numpy_buffer = pickle.load(f)
+
+        # 转换NumPy数组为张量并添加到缓冲区
+        for item in numpy_buffer:
+            stat_np, action_np, logp_np, rew_np, nxt_stat_np, done_np = item
+            self.buffer.append((
+                torch.tensor(stat_np, dtype=torch.float32, device=self.device),
+                torch.tensor(action_np, dtype=torch.float32, device=self.device),
+                torch.tensor(logp_np, dtype=torch.float32, device=self.device),
+                torch.tensor(rew_np, dtype=torch.float32, device=self.device),
+                torch.tensor(nxt_stat_np, dtype=torch.float32, device=self.device),
+                torch.tensor(done_np, dtype=torch.int, device=self.device)
+            ))
+        self.length = len(self.buffer)
+
 
 class CQLSAC:
     def __init__(
@@ -261,12 +304,14 @@ class CQLSAC:
 
             self.optim_q1.zero_grad()
             qloss_1.backward(retain_graph=True)
-            torch.nn.utils.clip_grad_norm_(self.qf1.parameters(), 1)
+            torch.nn.utils.clip_grad_norm_(self.qf1.net1.parameters(), 1)
+            check_net(self.qf1, "q1", self.global_steps, "net1")
             self.optim_q1.step()
 
             self.optim_q2.zero_grad()
             qloss_2.backward()
-            torch.nn.utils.clip_grad_norm_(self.qf1.parameters(), 1)
+            torch.nn.utils.clip_grad_norm_(self.qf1.net2.parameters(), 1)
+            check_net(self.qf1, "q2", self.global_steps, "net2")
             self.optim_q2.step()
 
         if self.global_steps % self.policy_frequency == 0:
@@ -279,12 +324,15 @@ class CQLSAC:
 
             self.optim_p.zero_grad()
             ploss.backward()
+            check_net(self.policy, "policy", self.global_steps)
             self.optim_p.step()
 
             # 更新温度参数alpha
             aloss = (-self.log_alpha.exp() * (self.target_ent.detach() + new_logp.detach())).mean()
             self.optim_alpha.zero_grad()
             aloss.backward()
+            writer.add_histogram("policy/alpha_grad", self.log_alpha.grad.clone().cpu().numpy(), self.global_steps)
+
             self.optim_alpha.step()
             self.alpha = torch.exp(self.log_alpha).detach()
 
@@ -300,7 +348,7 @@ class CQLSAC:
             n: int,
             t: int
     ):
-        for _ in range(n):
+        for _ in tqdm(range(n), desc="collect"):
             stat, _ = self.env.reset(seed=random.randint(0, 100))
             for _ in range(t):
                 with torch.no_grad():
@@ -345,13 +393,40 @@ def evaluate(
     return ret / epo
 
 
+def check_net(net: nn.Module, net_name, step: int, fliter=""):
+    for name, param in net.named_parameters():
+        if name.startswith(fliter):
+            # writer.add_histogram(net_name + f"/{name}_grad", param.grad.clone().cpu().numpy(), step)
+            writer.add_histogram(net_name + f"/{name}_data", param.data.clone().cpu().numpy(), step)
+
+
+def is_resource_enough():
+    """检查显存和内存是否充足"""
+    # 检查系统内存
+    sys_mem = psutil.virtual_memory()
+    if sys_mem.available < 2.0:
+        return False
+
+    # 检查GPU显存（如果有GPU）
+    if torch.cuda.is_available():
+        gpu_mem = torch.cuda.get_device_properties(0).total_memory
+        allocated = torch.cuda.memory_allocated(0)
+        reserved = torch.cuda.memory_reserved(0)
+        available_gpu = gpu_mem - (allocated + (reserved - allocated))  # 实际可用显存
+
+        if available_gpu < 1.0:
+            return False
+
+    return True
+
+
 def trainer(
         env_name: str = "Pendulum-v1",
-        hidden_size: int = 512,
-        epo: int = 50,
+        hidden_size: int = 64,
+        epos: int = 100000,
         steps: int = 200,
-        tau: float = 0.001,
-        batch_size: int = 32
+        tau: float = 5e-3,
+        batch_size: int = 128
 ):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"使用设备: {device}")
@@ -368,30 +443,29 @@ def trainer(
 
     # load_stat
     if glob.glob("model/best_qf1.pth"):
-        qf1.load_state_dict(torch.load("best_qf1.pth", map_location=device))
+        qf1.load_state_dict(torch.load("model/best_qf1.pth", map_location=device))
     if glob.glob("model/best_qf2.pth"):
-        qf2.load_state_dict(torch.load("best_qf2.pth", map_location=device))
+        qf2.load_state_dict(torch.load("model/best_qf2.pth", map_location=device))
     if glob.glob("model/best_policy.pth"):
-        policy.load_state_dict(torch.load("best_policy.pth", map_location=device))
+        policy.load_state_dict(torch.load("model/best_policy.pth", map_location=device))
+        print("load policy")
 
-    optim_q1 = optim.Adam(qf1.parameters(), lr=1e-4)
-    optim_q2 = optim.Adam(qf2.parameters(), lr=1e-4)
-    optim_p = optim.Adam(policy.parameters(), lr=3e-5)
+    optim_q1 = optim.Adam(qf1.net1.parameters(), lr=3e-4)
+    optim_q2 = optim.Adam(qf1.net2.parameters(), lr=3e-4)
+    optim_p = optim.Adam(policy.parameters(), lr=3e-4)
 
     cqlsac = CQLSAC(
         optim_q1, optim_q2, optim_p, env, 0.2, 0.99,
         policy, qf1, qf2, tau, act_size, 2, 1, 1,
-        device=device, repeat=10, beta=0.5, temp=0.2
+        device=device, repeat=10, beta=2, temp=0.2
     )
 
     buffer = ReplayBuffer(device)
-
-    cqlsac.collect(buffer, 1000, 200)
+    cqlsac.collect(buffer, 200, 200)
 
     best_ret = -float('inf')
-    for epo in range(epo):
+    for epo in range(epos):
         pbar = tqdm(range(steps), desc=f"train{epo}")
-        cqlsac.collect(buffer, 20, 200)
         for i in pbar:
             batch = buffer.get(batch_size)
             cqlsac.learn(batch)
@@ -403,7 +477,19 @@ def trainer(
                     torch.save(policy.state_dict(), "model/best_policy.pth")
                     torch.save(qf1.state_dict(), "model/best_qf1.pth")
                     torch.save(qf2.state_dict(), "model/best_qf2.pth")
+                if epo % 4 == 0:
+                    torch.save(policy.state_dict(), "model/cur_policy.pth")
+                    torch.save(qf1.state_dict(), "model/cur_qf1.pth")
+                    torch.save(qf2.state_dict(), "model/cur_qf2.pth")
+        if is_resource_enough() and epo <= 85:
+            batch_file = f"replay/batch-{epo}.pkl"
+            if glob.glob(batch_file):
+                buffer.load_from_file(batch_file)
+            else:
+                buffer.save_to_file(batch_file, epo * 200, 200)
+                cqlsac.collect(buffer, 200, 200)
 
 
 if __name__ == "__main__":
+
     trainer()
